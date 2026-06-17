@@ -2,6 +2,7 @@ import { useEffect, useReducer, useState } from "react";
 import type { ServerMessage } from "@meshscope/shared";
 import { AppState, emptyState, reduce } from "./store.js";
 import { connect } from "./transport.js";
+import { ErrorBoundary } from "./ErrorBoundary.js";
 import { FeedView } from "./views/FeedView.js";
 import { MapView } from "./views/MapView.js";
 import { GraphView } from "./views/GraphView.js";
@@ -44,10 +45,12 @@ export function App() {
         </div>
       </header>
       <main className="flex-1 min-h-0">
-        {tab === "map" && <MapView state={state} />}
-        {tab === "feed" && <FeedView state={state} />}
-        {tab === "graph" && <GraphView state={state} />}
-        {tab === "telemetry" && <TelemetryView state={state} />}
+        <ErrorBoundary resetKey={tab} label={`The ${tab} view`}>
+          {tab === "map" && <MapView state={state} />}
+          {tab === "feed" && <FeedView state={state} />}
+          {tab === "graph" && <GraphView state={state} />}
+          {tab === "telemetry" && <TelemetryView state={state} />}
+        </ErrorBoundary>
       </main>
     </div>
   );
