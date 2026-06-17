@@ -22,12 +22,22 @@ export function MapView({ state }: { state: AppState }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const markers = useRef<Map<string, { marker: maplibregl.Marker; fresh: boolean }>>(new Map());
+  const hasFit = useRef(false);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
     if (!container.current) return;
-    map.current = new maplibregl.Map({ container: container.current, style: STYLE, center: [0, 20], zoom: 1.5 });
-    return () => map.current?.remove();
+    const m = new maplibregl.Map({ container: container.current, style: STYLE, center: [0, 20], zoom: 1.5 });
+    map.current = m;
+    // On unmount (incl. StrictMode's dev double-mount), drop markers tied to this
+    // map instance so they get re-added to the next one instead of vanishing.
+    return () => {
+      markers.current.forEach((e) => e.marker.remove());
+      markers.current.clear();
+      hasFit.current = false;
+      m.remove();
+      map.current = null;
+    };
   }, []);
 
   // Re-evaluate freshness periodically so silent nodes fade even without new data.
@@ -39,7 +49,8 @@ export function MapView({ state }: { state: AppState }) {
   useEffect(() => {
     if (!map.current) return;
     const now = Date.now();
-    for (const pos of Object.values(state.positions)) {
+    const positions = Object.values(state.positions);
+    for (const pos of positions) {
       const fresh = now - (state.nodes[pos.nodeId]?.lastHeard ?? pos.time) < FRESH_MS;
       const name = state.nodes[pos.nodeId]?.longName ?? pos.nodeId;
       const existing = markers.current.get(pos.nodeId);
@@ -54,6 +65,14 @@ export function MapView({ state }: { state: AppState }) {
         .setPopup(new maplibregl.Popup().setText(name))
         .addTo(map.current);
       markers.current.set(pos.nodeId, { marker, fresh });
+    }
+    // First time nodes appear, frame them so a handful of pins are actually
+    // visible instead of being lost on a zoomed-out world map.
+    if (!hasFit.current && positions.length > 0) {
+      const bounds = new maplibregl.LngLatBounds();
+      positions.forEach((p) => bounds.extend([p.lon, p.lat]));
+      map.current.fitBounds(bounds, { padding: 60, maxZoom: 8, duration: 0 });
+      hasFit.current = true;
     }
   }, [state.positions, state.nodes, tick]);
 
