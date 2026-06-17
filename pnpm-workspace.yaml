@@ -1,0 +1,13 @@
+packages:
+  - shared
+  - bridge
+  - web
+
+allowBuilds:
+  esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild
+
+patchedDependencies:
+  '@meshtastic/protobufs': patches/@meshtastic__protobufs.patch

@@ -290,7 +290,13 @@ Expected: `connected`, then ~10 `msh/...` topic lines, then `got 10 packets`.
 
 **If no packets arrive in ~30s:** the public broker may be blocking anonymous subscribe or the creds changed. STOP and report — do not proceed; the project's data source is the blocker.
 
-**Record from the output:** the exact protobuf export names (e.g. `ServiceEnvelopeSchema`, `DataSchema`, `PositionSchema`, `UserSchema`, `TelemetrySchema`, `NeighborInfoSchema`, `PortNum`) and whether decode uses `fromBinary(Schema, bytes)` (protobuf-es v2) — used to confirm Task 4's imports. Adjust Task 4 import names to match if they differ.
+**SPIKE FINDINGS (recorded — these override the plan defaults below):**
+- **Broker rejects broad wildcards.** `msh/#` and `msh/2/e/#` get an immediate ECONNRESET (no SUBACK). The minimum working filter is `msh/2/e/<Channel>/#`, e.g. `msh/2/e/LongFast/#`. Task 6's default topic uses this. Packet rate on LongFast is ~5–7/min.
+- **Protobuf API = protobuf-es v2** (`@meshtastic/protobufs` 2.7.18 + `@bufbuild/protobuf` 2.12.0). Schemas are nested in namespaces, decode via `fromBinary(Schema, bytes)`:
+  - `pb.Mqtt.ServiceEnvelopeSchema`, `pb.Mesh.MeshPacketSchema`, `pb.Mesh.DataSchema`, `pb.Mesh.PositionSchema`, `pb.Mesh.UserSchema`, `pb.Mesh.NeighborInfoSchema`, `pb.Telemetry.TelemetrySchema`, `pb.Portnums.PortNum`
+  - oneof: `packet.payloadVariant.case === "decoded" | "encrypted"`, value at `.value`
+  - fields are camelCase: `latitudeI`, `longitudeI`, `rxSnr`, `rxRssi`, `channelId`, `airUtilTx`, `relativeHumidity`, `barometricPressure`
+  - Task 4 below has been updated to these exact names.
 
 - [ ] **Step 4: Commit the spike**
 
@@ -415,28 +421,23 @@ git commit -m "feat(bridge): AES-CTR crypto with default-key expansion"
 ```ts
 import { describe, it, expect } from "vitest";
 import { create, toBinary } from "@bufbuild/protobuf";
-import {
-  ServiceEnvelopeSchema,
-  MeshPacketSchema,
-  DataSchema,
-  PortNum,
-} from "@meshtastic/protobufs";
+import { Mqtt, Mesh, Portnums } from "@meshtastic/protobufs";
 import { decodeEnvelope } from "../src/decode.js";
 
 function textEnvelope(text: string, from: number) {
-  const data = create(DataSchema, {
-    portnum: PortNum.TEXT_MESSAGE_APP,
+  const data = create(Mesh.DataSchema, {
+    portnum: Portnums.PortNum.TEXT_MESSAGE_APP,
     payload: new TextEncoder().encode(text),
   });
-  const packet = create(MeshPacketSchema, {
+  const packet = create(Mesh.MeshPacketSchema, {
     from,
     to: 0xffffffff,
     id: 1234,
     rxSnr: 5.5,
     payloadVariant: { case: "decoded", value: data },
   });
-  const env = create(ServiceEnvelopeSchema, { packet, channelId: "LongFast" });
-  return toBinary(ServiceEnvelopeSchema, env);
+  const env = create(Mqtt.ServiceEnvelopeSchema, { packet, channelId: "LongFast" });
+  return toBinary(Mqtt.ServiceEnvelopeSchema, env);
 }
 
 describe("decodeEnvelope", () => {
@@ -468,16 +469,8 @@ Expected: FAIL — cannot find `../src/decode.js`.
 
 `bridge/src/decode.ts`:
 ```ts
-import { fromBinary } from "@bufbuild/protobuf";
-import {
-  ServiceEnvelopeSchema,
-  DataSchema,
-  PositionSchema,
-  UserSchema,
-  TelemetrySchema,
-  NeighborInfoSchema,
-  PortNum,
-} from "@meshtastic/protobufs";
+import { fromBinary, type MessageShape } from "@bufbuild/protobuf";
+import { Mqtt, Mesh, Telemetry, Portnums } from "@meshtastic/protobufs";
 import { nodeIdToHex, type MeshEvent } from "@meshscope/shared";
 import { expandKey, decrypt } from "./crypto.js";
 
@@ -486,7 +479,7 @@ const DEFAULT_KEY = expandKey(Buffer.from([0x01]));
 export function decodeEnvelope(payload: Uint8Array): MeshEvent[] {
   let env;
   try {
-    env = fromBinary(ServiceEnvelopeSchema, payload);
+    env = fromBinary(Mqtt.ServiceEnvelopeSchema, payload);
   } catch {
     return [];
   }
@@ -499,14 +492,14 @@ export function decodeEnvelope(payload: Uint8Array): MeshEvent[] {
   const now = Date.now();
 
   // Resolve the inner Data: either decoded inline, or decrypt the bytes.
-  let data: ReturnType<typeof fromBinary<typeof DataSchema>> | undefined;
+  let data: MessageShape<typeof Mesh.DataSchema> | undefined;
   const variant = packet.payloadVariant;
   if (variant?.case === "decoded") {
     data = variant.value;
   } else if (variant?.case === "encrypted") {
     try {
       const plain = decrypt(DEFAULT_KEY, packet.from, Number(packet.id), Buffer.from(variant.value));
-      data = fromBinary(DataSchema, plain);
+      data = fromBinary(Mesh.DataSchema, plain);
     } catch {
       data = undefined; // custom-key packet we can't read
     }
@@ -517,7 +510,7 @@ export function decodeEnvelope(payload: Uint8Array): MeshEvent[] {
   if (!data) return events;
 
   switch (data.portnum) {
-    case PortNum.TEXT_MESSAGE_APP: {
+    case Portnums.PortNum.TEXT_MESSAGE_APP: {
       events.push({
         type: "message",
         data: {
@@ -534,8 +527,8 @@ export function decodeEnvelope(payload: Uint8Array): MeshEvent[] {
       });
       break;
     }
-    case PortNum.POSITION_APP: {
-      const p = fromBinary(PositionSchema, data.payload);
+    case Portnums.PortNum.POSITION_APP: {
+      const p = fromBinary(Mesh.PositionSchema, data.payload);
       if (p.latitudeI !== 0 || p.longitudeI !== 0) {
         events.push({
           type: "position",
@@ -550,8 +543,8 @@ export function decodeEnvelope(payload: Uint8Array): MeshEvent[] {
       }
       break;
     }
-    case PortNum.NODEINFO_APP: {
-      const u = fromBinary(UserSchema, data.payload);
+    case Portnums.PortNum.NODEINFO_APP: {
+      const u = fromBinary(Mesh.UserSchema, data.payload);
       events.push({
         type: "node",
         data: {
@@ -566,8 +559,8 @@ export function decodeEnvelope(payload: Uint8Array): MeshEvent[] {
       });
       break;
     }
-    case PortNum.TELEMETRY_APP: {
-      const t = fromBinary(TelemetrySchema, data.payload);
+    case Portnums.PortNum.TELEMETRY_APP: {
+      const t = fromBinary(Telemetry.TelemetrySchema, data.payload);
       const v = t.variant;
       if (v?.case === "deviceMetrics") {
         events.push({
@@ -595,8 +588,8 @@ export function decodeEnvelope(payload: Uint8Array): MeshEvent[] {
       }
       break;
     }
-    case PortNum.NEIGHBORINFO_APP: {
-      const n = fromBinary(NeighborInfoSchema, data.payload);
+    case Portnums.PortNum.NEIGHBORINFO_APP: {
+      const n = fromBinary(Mesh.NeighborInfoSchema, data.payload);
       for (const nb of n.neighbors) {
         events.push({ type: "edge", data: { from, to: nodeIdToHex(nb.nodeId), snr: nb.snr } });
       }
@@ -752,11 +745,21 @@ import mqtt from "mqtt";
 const URL = process.env.MQTT_URL ?? "mqtt://mqtt.meshtastic.org:1883";
 const USER = process.env.MQTT_USER ?? "meshdev";
 const PASS = process.env.MQTT_PASS ?? "large4cats";
-const TOPIC = process.env.MQTT_TOPIC ?? "msh/#";
+// NOTE: the public broker rejects broad wildcards (msh/# -> ECONNRESET).
+// The narrowest filter that gets a SUBACK is msh/2/e/<Channel>/#.
+const TOPIC = process.env.MQTT_TOPIC ?? "msh/2/e/LongFast/#";
 
 /** Connect and invoke `onPacket` for every protobuf (`/e/`) message. */
 export function startMqtt(onPacket: (payload: Buffer) => void): void {
-  const client = mqtt.connect(URL, { username: USER, password: PASS, reconnectPeriod: 5000 });
+  // protocolVersion 4 (MQTT 3.1.1) + a unique clientId are required —
+  // the public broker rejects connections without them.
+  const client = mqtt.connect(URL, {
+    username: USER,
+    password: PASS,
+    reconnectPeriod: 5000,
+    protocolVersion: 4,
+    clientId: "meshscope_" + Math.random().toString(16).slice(2, 10),
+  });
   client.on("connect", () => {
     console.log("[mqtt] connected", URL);
     client.subscribe(TOPIC, (err) => err && console.error("[mqtt] subscribe", err));
