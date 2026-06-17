@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import type { AppState } from "../store.js";
 
@@ -16,10 +16,13 @@ const STYLE: maplibregl.StyleSpecification = {
   layers: [{ id: "osm", type: "raster", source: "osm" }],
 };
 
+const FRESH_MS = 15 * 60 * 1000;
+
 export function MapView({ state }: { state: AppState }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
-  const markers = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const markers = useRef<Map<string, { marker: maplibregl.Marker; fresh: boolean }>>(new Map());
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     if (!container.current) return;
@@ -27,24 +30,32 @@ export function MapView({ state }: { state: AppState }) {
     return () => map.current?.remove();
   }, []);
 
+  // Re-evaluate freshness periodically so silent nodes fade even without new data.
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     if (!map.current) return;
     const now = Date.now();
     for (const pos of Object.values(state.positions)) {
-      const fresh = now - (state.nodes[pos.nodeId]?.lastHeard ?? pos.time) < 15 * 60 * 1000;
+      const fresh = now - (state.nodes[pos.nodeId]?.lastHeard ?? pos.time) < FRESH_MS;
       const name = state.nodes[pos.nodeId]?.longName ?? pos.nodeId;
-      let marker = markers.current.get(pos.nodeId);
-      if (!marker) {
-        marker = new maplibregl.Marker({ color: fresh ? "#22c55e" : "#71717a" })
-          .setLngLat([pos.lon, pos.lat])
-          .setPopup(new maplibregl.Popup().setText(name))
-          .addTo(map.current);
-        markers.current.set(pos.nodeId, marker);
-      } else {
-        marker.setLngLat([pos.lon, pos.lat]);
+      const existing = markers.current.get(pos.nodeId);
+      if (existing && existing.fresh === fresh) {
+        existing.marker.setLngLat([pos.lon, pos.lat]);
+        continue;
       }
+      // New node, or freshness changed — (re)create the marker (color is fixed at construction).
+      existing?.marker.remove();
+      const marker = new maplibregl.Marker({ color: fresh ? "#22c55e" : "#71717a" })
+        .setLngLat([pos.lon, pos.lat])
+        .setPopup(new maplibregl.Popup().setText(name))
+        .addTo(map.current);
+      markers.current.set(pos.nodeId, { marker, fresh });
     }
-  }, [state.positions, state.nodes]);
+  }, [state.positions, state.nodes, tick]);
 
   return <div ref={container} className="w-full h-full" />;
 }
