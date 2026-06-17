@@ -14,7 +14,13 @@ export function connect(
   const open = () => {
     ws = new WebSocket(WS_URL);
     ws.onopen = () => onStatus(true);
-    ws.onmessage = (e) => onMessage(JSON.parse(e.data) as ServerMessage);
+    ws.onmessage = (e) => {
+      try {
+        onMessage(JSON.parse(e.data) as ServerMessage);
+      } catch {
+        // ignore malformed frame
+      }
+    };
     ws.onclose = () => {
       onStatus(false);
       if (!closed) timer = setTimeout(open, 3000);
