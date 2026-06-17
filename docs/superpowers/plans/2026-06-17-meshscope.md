@@ -751,7 +751,15 @@ const TOPIC = process.env.MQTT_TOPIC ?? "msh/2/e/LongFast/#";
 
 /** Connect and invoke `onPacket` for every protobuf (`/e/`) message. */
 export function startMqtt(onPacket: (payload: Buffer) => void): void {
-  const client = mqtt.connect(URL, { username: USER, password: PASS, reconnectPeriod: 5000 });
+  // protocolVersion 4 (MQTT 3.1.1) + a unique clientId are required —
+  // the public broker rejects connections without them.
+  const client = mqtt.connect(URL, {
+    username: USER,
+    password: PASS,
+    reconnectPeriod: 5000,
+    protocolVersion: 4,
+    clientId: "meshscope_" + Math.random().toString(16).slice(2, 10),
+  });
   client.on("connect", () => {
     console.log("[mqtt] connected", URL);
     client.subscribe(TOPIC, (err) => err && console.error("[mqtt] subscribe", err));
