@@ -9,7 +9,7 @@ const { broadcast } = startServer(PORT, state);
 
 let total = 0;
 startMqtt((payload) => {
-  for (const event of decodeEnvelope(payload as unknown as Uint8Array)) {
+  for (const event of decodeEnvelope(payload)) {
     state.apply(event);
     broadcast(event);
   }

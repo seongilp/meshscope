@@ -8,3 +8,6 @@ allowBuilds:
 
 onlyBuiltDependencies:
   - esbuild
+
+patchedDependencies:
+  '@meshtastic/protobufs': patches/@meshtastic__protobufs.patch
